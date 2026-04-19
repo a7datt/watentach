@@ -19,21 +19,30 @@ export default function PosTab({ setCartCount }: PosTabProps) {
   const { showToast } = useToast();
   const [products, setProducts] = useState<Product[]>([]);
   const [settings, setSettings] = useState<Settings | null>(null);
-  
+  const [loading, setLoading] = useState(true);
+
   const [searchQuery, setSearchQuery] = useState('');
   const [showScanner, setShowScanner] = useState(false);
   const [pulsingProductId, setPulsingProductId] = useState<string | null>(null);
-  
+
   const [cart, setCart] = useState<CartItem[]>([]);
   const [isReceiptModalOpen, setIsReceiptModalOpen] = useState(false);
   const [lastTransaction, setLastTransaction] = useState<Transaction | null>(null);
-  
+  const [checkingOut, setCheckingOut] = useState(false);
+
   const receiptRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    setProducts(DB.getProducts());
-    setSettings(DB.getSettings());
+    loadData();
   }, []);
+
+  const loadData = async () => {
+    setLoading(true);
+    const [prods, sett] = await Promise.all([DB.getProducts(), DB.getSettings()]);
+    setProducts(prods);
+    setSettings(sett);
+    setLoading(false);
+  };
 
   useEffect(() => {
     const totalItems = cart.reduce((sum, item) => sum + item.cart_qty, 0);
@@ -41,8 +50,8 @@ export default function PosTab({ setCartCount }: PosTabProps) {
   }, [cart, setCartCount]);
 
   const filteredProducts = useMemo(() => {
-    return products.filter(p => 
-      p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
+    return products.filter(p =>
+      p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       p.barcode.includes(searchQuery)
     );
   }, [products, searchQuery]);
@@ -98,7 +107,7 @@ export default function PosTab({ setCartCount }: PosTabProps) {
   const cartTotalUSD = cart.reduce((sum, item) => sum + (item.price_usd * item.cart_qty), 0);
   const cartTotalSYP = cartTotalUSD * (settings?.exchange_rate || 1600);
 
-  const handleCheckout = () => {
+  const handleCheckout = async () => {
     if (!settings || cart.length === 0) return;
 
     let canProceed = true;
@@ -109,12 +118,13 @@ export default function PosTab({ setCartCount }: PosTabProps) {
         canProceed = false;
       }
     });
-
     if (!canProceed) return;
 
+    setCheckingOut(true);
+
     const rate = settings.exchange_rate;
-    const existingTransactions = DB.getTransactions();
-    const invoiceNumber = String(existingTransactions.length + 1).padStart(5, '0');
+    const txnCount = await DB.getTransactionCount();
+    const invoiceNumber = String(txnCount + 1).padStart(5, '0');
 
     let totalProfitUSD = 0;
     let totalProfitSYP = 0;
@@ -140,7 +150,7 @@ export default function PosTab({ setCartCount }: PosTabProps) {
     });
 
     const newTransaction: Transaction = {
-      id: "txn_" + Date.now(),
+      id: 'txn_' + Date.now(),
       invoice_number: invoiceNumber,
       timestamp: new Date().toISOString(),
       items: transactionItems,
@@ -148,22 +158,32 @@ export default function PosTab({ setCartCount }: PosTabProps) {
       total_syp: cartTotalSYP,
       profit_usd: totalProfitUSD,
       profit_syp: totalProfitSYP,
-      exchange_rate_at_sale: rate
+      exchange_rate_at_sale: rate,
     };
 
-    DB.saveTransactions([...existingTransactions, newTransaction]);
-    
+    // حفظ الفاتورة
+    const saved = await DB.saveTransaction(newTransaction);
+    if (!saved) {
+      showToast('حدث خطأ أثناء حفظ الفاتورة', 'error');
+      setCheckingOut(false);
+      return;
+    }
+
+    // تخفيض الكميات
+    await DB.decrementQuantities(cart.map(c => ({ id: c.id, qty: c.cart_qty })));
+
+    // تحديث المنتجات محلياً
     const updatedProducts = products.map(p => {
       const cartItem = cart.find(c => c.id === p.id);
       return cartItem ? { ...p, quantity: p.quantity - cartItem.cart_qty } : p;
     });
-    DB.saveProducts(updatedProducts);
     setProducts(updatedProducts);
 
     setLastTransaction(newTransaction);
     setCart([]);
     setIsReceiptModalOpen(true);
     showToast('تم إتمام البيع بنجاح', 'success');
+    setCheckingOut(false);
   };
 
   const printReceipt = () => {
@@ -174,7 +194,7 @@ export default function PosTab({ setCartCount }: PosTabProps) {
     if (!receiptRef.current) return;
     try {
       showToast('جاري تحضير الفاتورة...', 'info');
-      const canvas = await html2canvas(receiptRef.current, { 
+      const canvas = await html2canvas(receiptRef.current, {
         scale: 2,
         useCORS: true,
         backgroundColor: '#ffffff'
@@ -182,13 +202,10 @@ export default function PosTab({ setCartCount }: PosTabProps) {
       canvas.toBlob(async (blob) => {
         if (!blob) return;
         const file = new File([blob], `invoice_${lastTransaction?.invoice_number}.png`, { type: 'image/png' });
-        
+
         if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
           try {
-            await navigator.share({
-              files: [file],
-              title: "فاتورة المبيعات",
-            });
+            await navigator.share({ files: [file], title: 'فاتورة المبيعات' });
             showToast('تمت المشاركة', 'success');
           } catch (err) {
             downloadBlob(blob, file.name);
@@ -227,20 +244,20 @@ export default function PosTab({ setCartCount }: PosTabProps) {
 
       {/* BODY */}
       <div className="flex-1 flex flex-col gap-3 pb-32 print:hidden">
-        
+
         {/* SEARCH */}
         <div className="flex gap-2">
           <div className="relative flex-1">
             <Search className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" size={18} />
-            <input 
-              type="text" 
-              placeholder="ابحث..." 
+            <input
+              type="text"
+              placeholder="ابحث..."
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
               className="w-full h-10 pl-3 pr-9 rounded-xl border border-gray-200 focus:border-primary focus:ring-1 focus:ring-primary outline-none text-sm transition-all shadow-sm"
             />
           </div>
-          <button 
+          <button
             onClick={() => setShowScanner(true)}
             className="h-10 px-3 rounded-xl border border-primary text-primary flex items-center gap-1.5 font-bold hover:bg-primary-light transition-colors bg-white shadow-sm"
           >
@@ -250,53 +267,60 @@ export default function PosTab({ setCartCount }: PosTabProps) {
         </div>
 
         {/* PRODUCTS GRID */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
-          {filteredProducts.map(product => {
-            const outOfStock = product.quantity <= 0;
-            const pulsing = pulsingProductId === product.id;
+        {loading ? (
+          <div className="flex flex-col items-center justify-center py-16 text-gray-400 gap-3">
+            <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+            <p className="text-sm font-semibold">جاري التحميل...</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2.5">
+            {filteredProducts.map(product => {
+              const outOfStock = product.quantity <= 0;
+              const pulsing = pulsingProductId === product.id;
 
-            return (
-              <div 
-                key={product.id}
-                onClick={() => addToCart(product)}
-                className={`
-                  bg-white rounded-xl p-3 shadow-sm border cursor-pointer relative overflow-hidden transition-all duration-200
-                  ${outOfStock ? 'opacity-50 grayscale pointer-events-none border-gray-200' : 'border-transparent hover:border-primary hover:shadow'}
-                  ${pulsing ? 'animate-pulse ring-2 ring-primary ring-offset-1' : ''}
-                `}
-              >
-                <div className={`absolute top-0 right-0 rounded-bl-lg px-2 py-0.5 text-[10px] font-bold text-white shadow-sm flex items-center
-                  ${outOfStock ? 'bg-gray-400' : (product.quantity <= 5 ? 'bg-warning' : 'bg-success')}
-                `}>
-                  الكمية: {product.quantity}
-                </div>
+              return (
+                <div
+                  key={product.id}
+                  onClick={() => addToCart(product)}
+                  className={`
+                    bg-white rounded-xl p-3 shadow-sm border cursor-pointer relative overflow-hidden transition-all duration-200
+                    ${outOfStock ? 'opacity-50 grayscale pointer-events-none border-gray-200' : 'border-transparent hover:border-primary hover:shadow'}
+                    ${pulsing ? 'animate-pulse ring-2 ring-primary ring-offset-1' : ''}
+                  `}
+                >
+                  <div className={`absolute top-0 right-0 rounded-bl-lg px-2 py-0.5 text-[10px] font-bold text-white shadow-sm flex items-center
+                    ${outOfStock ? 'bg-gray-400' : (product.quantity <= 5 ? 'bg-warning' : 'bg-success')}
+                  `}>
+                    الكمية: {product.quantity}
+                  </div>
 
-                <div className="mt-4 mb-2">
-                  <h3 className="font-semibold text-gray-800 line-clamp-2 text-xs leading-tight min-h-[34px] flex items-start gap-1">
-                    <Tag size={12} className="shrink-0 mt-0.5 text-gray-400" />
-                    {product.name}
-                  </h3>
-                </div>
-                
-                <div className="mt-auto pt-1">
-                  <div className="text-sm font-bold text-primary">
-                    {formatCurrencySYP(product.price_usd * (settings?.exchange_rate || 1600))}
+                  <div className="mt-4 mb-2">
+                    <h3 className="font-semibold text-gray-800 line-clamp-2 text-xs leading-tight min-h-[34px] flex items-start gap-1">
+                      <Tag size={12} className="shrink-0 mt-0.5 text-gray-400" />
+                      {product.name}
+                    </h3>
                   </div>
-                  <div className="text-[10px] text-gray-400 font-semibold mt-0.5">
-                    {formatCurrencyUSD(product.price_usd)}
+
+                  <div className="mt-auto pt-1">
+                    <div className="text-sm font-bold text-primary">
+                      {formatCurrencySYP(product.price_usd * (settings?.exchange_rate || 1600))}
+                    </div>
+                    <div className="text-[10px] text-gray-400 font-semibold mt-0.5">
+                      {formatCurrencyUSD(product.price_usd)}
+                    </div>
                   </div>
                 </div>
+              );
+            })}
+
+            {filteredProducts.length === 0 && (
+              <div className="col-span-full py-8 flex flex-col items-center justify-center text-gray-400 gap-2">
+                <Package size={32} className="opacity-30" />
+                <p className="text-sm font-medium">لا يوجد منتجات</p>
               </div>
-            );
-          })}
-          
-          {filteredProducts.length === 0 && (
-            <div className="col-span-full py-8 flex flex-col items-center justify-center text-gray-400 gap-2">
-              <Package size={32} className="opacity-30" />
-              <p className="text-sm font-medium">لا يوجد منتجات</p>
-            </div>
-          )}
-        </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* CART PANEL */}
@@ -321,7 +345,7 @@ export default function PosTab({ setCartCount }: PosTabProps) {
                   {formatCurrencySYP((item.price_usd * (settings?.exchange_rate || 1600)) * item.cart_qty)}
                 </div>
               </div>
-              
+
               <div className="flex items-center gap-4 justify-between sm:justify-start">
                 <div className="flex items-center gap-2 bg-gray-50 px-1.5 py-1 rounded-lg border border-gray-100">
                   <button onClick={() => updateCartQty(item.id, -1)} className="w-6 h-6 rounded-md bg-white text-primary shadow-sm flex items-center justify-center border border-gray-200">
@@ -332,7 +356,7 @@ export default function PosTab({ setCartCount }: PosTabProps) {
                     <Plus size={14} />
                   </button>
                 </div>
-                
+
                 <button onClick={() => removeFromCart(item.id)} className="text-gray-400 hover:text-danger bg-gray-50 p-1.5 rounded-md">
                   <Trash2 size={14} />
                 </button>
@@ -351,12 +375,16 @@ export default function PosTab({ setCartCount }: PosTabProps) {
               {formatCurrencySYP(cartTotalSYP)}
             </div>
           </div>
-          
-          <button 
+
+          <button
             onClick={handleCheckout}
-            className="w-full h-11 bg-primary text-white font-bold text-sm rounded-xl shadow-md mt-1 flex items-center justify-center gap-1.5 hover:bg-primary-dark transition-all"
+            disabled={checkingOut}
+            className="w-full h-11 bg-primary text-white font-bold text-sm rounded-xl shadow-md mt-1 flex items-center justify-center gap-1.5 hover:bg-primary-dark transition-all disabled:opacity-60"
           >
-            <CheckCircle size={16} /> إتمام الدفع
+            {checkingOut
+              ? <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              : <><CheckCircle size={16} /> إتمام الدفع</>
+            }
           </button>
         </div>
       </div>
@@ -366,9 +394,8 @@ export default function PosTab({ setCartCount }: PosTabProps) {
       {/* RECEIPT MODAL */}
       {isReceiptModalOpen && lastTransaction && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/60 p-4 print:hidden">
-          
-          {/* Printable Card */}
-          <div 
+
+          <div
             ref={receiptRef}
             className="bg-white w-full max-w-[340px] rounded-xl shadow-lg p-5 relative overflow-hidden"
           >
@@ -418,29 +445,20 @@ export default function PosTab({ setCartCount }: PosTabProps) {
           </div>
 
           <div className="w-full max-w-[340px] mt-4 flex gap-2">
-            <button 
-              onClick={printReceipt}
-              className="flex-1 bg-white text-gray-700 font-bold h-10 rounded-lg flex items-center justify-center gap-1.5 text-sm"
-            >
+            <button onClick={printReceipt} className="flex-1 bg-white text-gray-700 font-bold h-10 rounded-lg flex items-center justify-center gap-1.5 text-sm">
               <Printer size={16} /> طباعة
             </button>
-            <button 
-              onClick={shareReceipt}
-              className="flex-1 bg-success text-white font-bold h-10 rounded-lg flex items-center justify-center gap-1.5 text-sm"
-            >
+            <button onClick={shareReceipt} className="flex-1 bg-success text-white font-bold h-10 rounded-lg flex items-center justify-center gap-1.5 text-sm">
               <Share2 size={16} /> مشاركة
             </button>
-            <button 
-              onClick={() => setIsReceiptModalOpen(false)}
-              className="flex-none px-4 bg-gray-800 text-white font-bold h-10 rounded-lg text-sm"
-            >
+            <button onClick={() => setIsReceiptModalOpen(false)} className="flex-none px-4 bg-gray-800 text-white font-bold h-10 rounded-lg text-sm">
               إغلاق
             </button>
           </div>
         </div>
       )}
 
-      {/* CSS For Printing natively */}
+      {/* Print Area */}
       <style dangerouslySetInnerHTML={{__html: `
         @media print {
           body * { visibility: hidden !important; }
@@ -460,7 +478,7 @@ export default function PosTab({ setCartCount }: PosTabProps) {
           .border-b { border-bottom: 1px solid #000 !important; }
         }
       `}} />
-      
+
       {lastTransaction && (
         <div id="print-area" className="hidden print:block w-[80mm]" dir="rtl">
           <div className="text-center font-bold text-sm mb-1">{settings?.company_name}</div>

@@ -8,42 +8,49 @@ import { formatDate } from '../lib/utils';
 export default function SettingsTab() {
   const { showToast } = useToast();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  
+
   const [settings, setSettings] = useState<Settings | null>(null);
   const [rateInput, setRateInput] = useState('');
-  
+  const [saving, setSaving] = useState(false);
+
   const [modalType, setModalType] = useState<'import' | 'delete_txns' | 'wipe_all' | null>(null);
   const [importDataPreview, setImportDataPreview] = useState<any>(null);
   const [wipeConfirmation, setWipeConfirmation] = useState('');
 
   useEffect(() => {
-    const s = DB.getSettings();
-    setSettings(s);
-    setRateInput(s.exchange_rate.toString());
+    loadSettings();
   }, []);
 
-  const handleSaveRate = () => {
+  const loadSettings = async () => {
+    const s = await DB.getSettings();
+    setSettings(s);
+    setRateInput(s.exchange_rate.toString());
+  };
+
+  const handleSaveRate = async () => {
     const r = parseFloat(rateInput);
     if (isNaN(r) || r <= 0) {
       showToast('سعر الصرف غير صالح', 'error');
       return;
     }
+    setSaving(true);
     const newSettings: Settings = {
       ...settings!,
       exchange_rate: r,
-      exchange_rate_updated: new Date().toISOString()
+      exchange_rate_updated: new Date().toISOString(),
     };
-    DB.saveSettings(newSettings);
-    setSettings(newSettings);
-    showToast('تم الحفظ بنجاح', 'success');
+    const ok = await DB.saveSettings(newSettings);
+    if (ok) {
+      setSettings(newSettings);
+      showToast('تم الحفظ بنجاح', 'success');
+    } else {
+      showToast('حدث خطأ أثناء الحفظ', 'error');
+    }
+    setSaving(false);
   };
 
-  const exportData = () => {
-    const data = {
-      products: DB.getProducts(),
-      transactions: DB.getTransactions(),
-      settings: DB.getSettings()
-    };
+  const exportData = async () => {
+    const data = await DB.exportData();
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -58,7 +65,7 @@ export default function SettingsTab() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-    
+
     const reader = new FileReader();
     reader.onload = (event) => {
       try {
@@ -77,32 +84,43 @@ export default function SettingsTab() {
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
-  const confirmImport = () => {
+  const confirmImport = async () => {
     if (!importDataPreview) return;
-    DB.saveProducts(importDataPreview.products);
-    DB.saveTransactions(importDataPreview.transactions);
-    DB.saveSettings(importDataPreview.settings);
-    setSettings(importDataPreview.settings);
-    setRateInput(importDataPreview.settings.exchange_rate.toString());
-    showToast('تم الاستيراد بنجاح', 'success');
+    setSaving(true);
+    const ok = await DB.importData(importDataPreview);
+    if (ok) {
+      await loadSettings();
+      showToast('تم الاستيراد بنجاح', 'success');
+    } else {
+      showToast('حدث خطأ أثناء الاستيراد', 'error');
+    }
+    setSaving(false);
     setModalType(null);
   };
 
-  const handleDeleteTxns = () => {
-    DB.saveTransactions([]);
-    showToast('تم المسح بنجاح', 'success');
+  const handleDeleteTxns = async () => {
+    setSaving(true);
+    const ok = await DB.deleteAllTransactions();
+    if (ok) {
+      showToast('تم المسح بنجاح', 'success');
+    } else {
+      showToast('حدث خطأ', 'error');
+    }
+    setSaving(false);
     setModalType(null);
   };
 
-  const handleWipeAll = () => {
+  const handleWipeAll = async () => {
     if (wipeConfirmation !== 'تأكيد') {
       showToast('يرجى كتابة كلمة "تأكيد"', 'error');
       return;
     }
-    localStorage.removeItem('wt_products');
-    localStorage.removeItem('wt_transactions');
-    localStorage.removeItem('wt_settings');
-    window.location.reload();
+    setSaving(true);
+    await DB.wipeAll();
+    await loadSettings();
+    showToast('تم ضبط المصنع', 'success');
+    setSaving(false);
+    setModalType(null);
   };
 
   return (
@@ -115,20 +133,21 @@ export default function SettingsTab() {
       </div>
 
       <div className="flex-1 flex flex-col gap-4 pb-8 max-w-md mx-auto w-full">
-        
+
         <div className="text-center py-4">
           <div className="w-16 h-16 bg-white rounded-2xl shadow border border-gray-100 flex items-center justify-center mx-auto mb-3">
-             <Building2 size={32} className="text-primary" />
+            <Building2 size={32} className="text-primary" />
           </div>
           <h2 className="text-2xl font-black text-gray-900 mb-1">{settings?.company_name}</h2>
           <p className="text-gray-500 text-xs font-bold">نظام نقاط البيع v1.0</p>
         </div>
 
+        {/* EXCHANGE RATE */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
           <h3 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-1.5">
             <ArrowRightLeft size={16} className="text-primary" /> سعر الصرف
           </h3>
-          
+
           <div className="text-center mb-4">
             <div className="text-2xl font-black text-gray-800">
               {settings?.exchange_rate.toLocaleString('en-US')} <span className="text-sm text-gray-500">ل.س / $</span>
@@ -139,19 +158,20 @@ export default function SettingsTab() {
           </div>
 
           <div className="flex gap-2">
-            <input 
-              type="number" 
+            <input
+              type="number"
               min="1" step="1"
               value={rateInput}
               onChange={e => setRateInput(e.target.value)}
               className="flex-1 h-10 px-3 rounded-lg border border-gray-200 focus:border-primary focus:ring-1 outline-none font-bold text-center bg-gray-50 text-sm"
               dir="ltr"
             />
-            <button 
+            <button
               onClick={handleSaveRate}
-              className="px-4 bg-primary text-white font-bold rounded-lg flex items-center gap-1.5 hover:bg-primary-dark transition-colors text-sm"
+              disabled={saving}
+              className="px-4 bg-primary text-white font-bold rounded-lg flex items-center gap-1.5 hover:bg-primary-dark transition-colors text-sm disabled:opacity-60"
             >
-              <Save size={16} /> حفظ
+              {saving ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : <><Save size={16} /> حفظ</>}
             </button>
           </div>
 
@@ -161,44 +181,34 @@ export default function SettingsTab() {
           </div>
         </div>
 
+        {/* DATA */}
         <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4 flex flex-col gap-2.5">
           <h3 className="text-sm font-bold text-gray-900 mb-1 flex items-center gap-1.5">
             <Database size={16} className="text-primary" /> البيانات
           </h3>
-          
-          <button 
-            onClick={exportData}
-            className="w-full h-10 bg-gray-50 border border-gray-200 text-gray-700 font-bold rounded-lg flex items-center justify-center gap-1.5 text-sm"
-          >
+
+          <button onClick={exportData} className="w-full h-10 bg-gray-50 border border-gray-200 text-gray-700 font-bold rounded-lg flex items-center justify-center gap-1.5 text-sm">
             <Download size={16} className="text-primary" /> نسخ احتياطي
           </button>
-          
-          <button 
-            onClick={() => fileInputRef.current?.click()}
-            className="w-full h-10 bg-gray-50 border border-gray-200 text-gray-700 font-bold rounded-lg flex items-center justify-center gap-1.5 text-sm"
-          >
+
+          <button onClick={() => fileInputRef.current?.click()} className="w-full h-10 bg-gray-50 border border-gray-200 text-gray-700 font-bold rounded-lg flex items-center justify-center gap-1.5 text-sm">
             <Upload size={16} className="text-success" /> استعادة
           </button>
           <input type="file" accept=".json" className="hidden" ref={fileInputRef} onChange={handleFileChange} />
         </div>
 
+        {/* DANGER ZONE */}
         <div className="bg-white rounded-xl shadow-sm border border-red-200 p-4 flex flex-col gap-2.5 relative overflow-hidden">
           <div className="absolute top-0 right-0 w-1 h-full bg-danger" />
           <h3 className="text-sm font-bold text-danger mb-1 flex items-center gap-1.5">
             <AlertTriangle size={16} /> منطقة الخطر
           </h3>
-          
-          <button 
-            onClick={() => setModalType('delete_txns')}
-            className="w-full h-10 bg-red-50 border border-red-100 text-danger font-bold rounded-lg flex items-center justify-center gap-1.5 text-sm"
-          >
+
+          <button onClick={() => setModalType('delete_txns')} className="w-full h-10 bg-red-50 border border-red-100 text-danger font-bold rounded-lg flex items-center justify-center gap-1.5 text-sm">
             <Trash2 size={16} /> مسح السجلات
           </button>
-          
-          <button 
-            onClick={() => { setWipeConfirmation(''); setModalType('wipe_all'); }}
-            className="w-full h-10 bg-danger text-white font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-md shadow-danger/20 text-sm"
-          >
+
+          <button onClick={() => { setWipeConfirmation(''); setModalType('wipe_all'); }} className="w-full h-10 bg-danger text-white font-bold rounded-lg flex items-center justify-center gap-1.5 shadow-md shadow-danger/20 text-sm">
             <Trash2 size={16} /> ضبط المصنع
           </button>
         </div>
@@ -208,7 +218,7 @@ export default function SettingsTab() {
       {modalType && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setModalType(null)}>
           <div className="bg-white w-full max-w-[320px] rounded-2xl shadow-xl p-5 text-center" onClick={e => e.stopPropagation()}>
-            
+
             {modalType === 'import' && (
               <>
                 <Upload size={32} className="text-primary mx-auto mb-3" />
@@ -219,7 +229,9 @@ export default function SettingsTab() {
                 </div>
                 <div className="flex gap-2">
                   <button onClick={() => setModalType(null)} className="flex-1 h-10 rounded-lg font-bold bg-gray-100 text-gray-700 text-sm">إلغاء</button>
-                  <button onClick={confirmImport} className="flex-1 h-10 rounded-lg font-bold bg-primary text-white text-sm">تأكيد</button>
+                  <button onClick={confirmImport} disabled={saving} className="flex-1 h-10 rounded-lg font-bold bg-primary text-white text-sm disabled:opacity-60">
+                    {saving ? '...' : 'تأكيد'}
+                  </button>
                 </div>
               </>
             )}
@@ -231,7 +243,9 @@ export default function SettingsTab() {
                 <p className="text-gray-500 mb-4 text-xs">سيتم حذف سجل الفواتير، وتبقى المنتجات.</p>
                 <div className="flex gap-2">
                   <button onClick={() => setModalType(null)} className="flex-1 h-10 rounded-lg font-bold bg-gray-100 text-gray-700 text-sm">إلغاء</button>
-                  <button onClick={handleDeleteTxns} className="flex-1 h-10 rounded-lg font-bold bg-danger text-white text-sm">مسح</button>
+                  <button onClick={handleDeleteTxns} disabled={saving} className="flex-1 h-10 rounded-lg font-bold bg-danger text-white text-sm disabled:opacity-60">
+                    {saving ? '...' : 'مسح'}
+                  </button>
                 </div>
               </>
             )}
@@ -241,8 +255,8 @@ export default function SettingsTab() {
                 <AlertTriangle size={32} className="text-danger mx-auto mb-2 animate-pulse" />
                 <h3 className="text-base font-black text-danger mb-1">ضبط المصنع!</h3>
                 <p className="text-gray-500 mb-3 text-[11px] font-bold">لا يمكن التراجع. اكتب "تأكيد":</p>
-                <input 
-                  type="text" 
+                <input
+                  type="text"
                   value={wipeConfirmation}
                   onChange={e => setWipeConfirmation(e.target.value)}
                   className="w-full h-10 px-3 rounded-lg border-2 border-gray-200 focus:border-danger outline-none mb-4 text-center font-bold text-sm"
@@ -250,12 +264,12 @@ export default function SettingsTab() {
                 />
                 <div className="flex gap-2">
                   <button onClick={() => setModalType(null)} className="flex-1 h-10 rounded-lg font-bold bg-gray-100 text-gray-700 text-sm">إلغاء</button>
-                  <button 
+                  <button
                     onClick={handleWipeAll}
-                    disabled={wipeConfirmation !== 'تأكيد'}
+                    disabled={wipeConfirmation !== 'تأكيد' || saving}
                     className="flex-1 h-10 rounded-lg font-bold bg-danger text-white disabled:opacity-50 text-sm"
                   >
-                    مسح كلي
+                    {saving ? '...' : 'مسح كلي'}
                   </button>
                 </div>
               </>
