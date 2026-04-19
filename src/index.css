@@ -1,0 +1,33 @@
+@import url('https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800;900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: 'Cairo', ui-sans-serif, system-ui, sans-serif;
+  
+  --color-primary: #1A6FFF;
+  --color-primary-dark: #1554CC;
+  --color-primary-light: #EEF4FF;
+  --color-success: #22C55E;
+  --color-danger: #EF4444;
+  --color-warning: #F59E0B;
+  --color-text-primary: #0F172A;
+  --color-text-secondary: #64748B;
+  --color-border-color: #E2E8F0;
+}
+
+@layer base {
+  body {
+    font-family: 'Cairo', sans-serif;
+    background-color: #F8FAFC;
+    color: var(--color-text-primary);
+  }
+}
+
+/* Hide scrollbar for clean UI in certain areas */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;  /* IE and Edge */
+  scrollbar-width: none;  /* Firefox */
+}
