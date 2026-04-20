@@ -111,7 +111,7 @@ export default function SettingsTab() {
     const amount = parseFloat(depositProfitAmount);
     if (!amount || amount <= 0) { showToast('أدخل مبلغاً صحيحاً', 'error'); return; }
     setDepositProfitLoading(true);
-    const ok = await DB.withdrawFromCashBox(depositProfitCurrency, -amount, depositProfitNote || 'إيداع أرباح');
+    const ok = await DB.depositProfitToCashBox(depositProfitCurrency, amount, depositProfitNote || 'إيداع أرباح');
     if (ok) {
       showToast('تم إيداع الأرباح بنجاح ✓', 'success');
       closeModal();
@@ -565,7 +565,7 @@ export default function SettingsTab() {
               <>
                 <div className="flex justify-between items-center mb-4">
                   <h3 className="font-bold text-base text-gray-900 flex items-center gap-1.5">
-                    <ScrollText size={18} className="text-primary" /> سجلات السحوبات
+                    <ScrollText size={18} className="text-primary" /> سجل عمليات الصندوق
                   </h3>
                   <button onClick={closeModal} className="text-gray-400 p-1 rounded-lg"><X size={18} /></button>
                 </div>
@@ -574,22 +574,53 @@ export default function SettingsTab() {
                     <div className="w-7 h-7 border-2 border-primary border-t-transparent rounded-full animate-spin" />
                   </div>
                 ) : operations.length === 0 ? (
-                  <div className="py-8 text-center text-gray-400 text-sm font-semibold">لا توجد سحوبات مسجّلة</div>
+                  <div className="py-8 text-center text-gray-400 text-sm font-semibold">لا توجد عمليات مسجّلة</div>
                 ) : (
                   <div className="max-h-[55vh] overflow-y-auto no-scrollbar flex flex-col gap-2">
-                    {operations.map(op => (
-                      <div key={op.id} className={`rounded-xl p-3 border flex justify-between items-start gap-2 ${op.currency === 'SYP' ? 'bg-green-50 border-green-100' : 'bg-blue-50 border-blue-100'}`}>
-                        <div className="flex-1 min-w-0">
-                          <div className={`text-xs font-bold truncate ${op.currency === 'SYP' ? 'text-green-800' : 'text-blue-800'}`}>
-                            {op.note || 'سحب'}
+                    {operations.map(op => {
+                      // تحديد نوع العملية: إيداع (amount سالب) أو سحب (amount موجب)
+                      const isDeposit = op.amount < 0 || op.type === 'deposit' || op.type === 'profit_deposit';
+                      const isProfitDeposit = op.type === 'profit_deposit';
+                      const absAmount = Math.abs(op.amount);
+                      const typeLabel = isProfitDeposit ? 'إيداع أرباح' : isDeposit ? 'إيداع' : 'سحب';
+                      const amountDisplay = op.currency === 'SYP'
+                        ? `${absAmount.toLocaleString('en-US')} ل.س`
+                        : `$${absAmount.toFixed(2)}`;
+
+                      return (
+                        <div key={op.id} className={`rounded-xl p-3 border flex justify-between items-start gap-2 ${
+                          isDeposit
+                            ? isProfitDeposit
+                              ? 'bg-emerald-50 border-emerald-100'
+                              : 'bg-green-50 border-green-100'
+                            : 'bg-red-50 border-red-100'
+                        }`}>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5 mb-0.5">
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded-full ${
+                                isDeposit
+                                  ? isProfitDeposit
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : 'bg-green-100 text-green-700'
+                                  : 'bg-red-100 text-red-700'
+                              }`}>
+                                {typeLabel}
+                              </span>
+                              <span className={`text-[10px] font-bold px-1 py-0.5 rounded ${op.currency === 'SYP' ? 'text-green-600' : 'text-blue-600'}`}>
+                                {op.currency === 'SYP' ? 'ل.س' : '$'}
+                              </span>
+                            </div>
+                            <div className="text-xs font-bold text-gray-700 truncate">
+                              {op.note || typeLabel}
+                            </div>
+                            <div className="text-[10px] text-gray-400 mt-0.5" dir="ltr">{formatDate(op.timestamp)}</div>
                           </div>
-                          <div className="text-[10px] text-gray-400 mt-0.5" dir="ltr">{formatDate(op.timestamp)}</div>
+                          <div className={`text-sm font-black shrink-0 ${isDeposit ? 'text-emerald-600' : 'text-red-600'}`}>
+                            {isDeposit ? '+' : '-'}{amountDisplay}
+                          </div>
                         </div>
-                        <div className={`text-sm font-black shrink-0 ${op.currency === 'SYP' ? 'text-green-700' : 'text-blue-700'}`}>
-                          {op.currency === 'SYP' ? `${op.amount.toLocaleString('en-US')} ل.س` : `$${op.amount.toFixed(2)}`}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
                 <button onClick={closeModal} className="w-full h-10 bg-gray-100 text-gray-700 font-bold text-sm rounded-xl mt-4">إغلاق</button>

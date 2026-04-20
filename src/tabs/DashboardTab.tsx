@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { BarChart3, Calendar, ChevronDown, ChevronUp, TrendingUp, PackageSearch, ListOrdered, Landmark, DollarSign, FileText, X, Printer, Share2, Building2 } from 'lucide-react';
 import { DB } from '../lib/db';
-import { Transaction, Product, CashBoxState, Settings } from '../lib/types';
+import { Transaction, Product, CashBoxState, CashBoxOperation, Settings } from '../lib/types';
 import { formatCurrencySYP, formatCurrencyUSD, formatDate } from '../lib/utils';
 import { useToast } from '../components/Toast';
 import { isToday, isThisWeek, isThisMonth, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns';
@@ -16,6 +16,7 @@ export default function DashboardTab() {
   const [settings, setSettings] = useState<Settings | null>(null);
   const [cashBox, setCashBox] = useState<CashBoxState>({ balance_syp: 0, balance_usd: 0 });
   const [loading, setLoading] = useState(true);
+  const [profitDeposits, setProfitDeposits] = useState<{ syp: number; usd: number; all: CashBoxOperation[] }>({ syp: 0, usd: 0, all: [] });
 
   const [filterType, setFilterType] = useState<FilterType>('today');
   const [customStart, setCustomStart] = useState('');
@@ -31,16 +32,26 @@ export default function DashboardTab() {
 
   const loadData = async () => {
     setLoading(true);
-    const [txns, prods, sett, cb] = await Promise.all([
+    const [txns, prods, sett, cb, pd] = await Promise.all([
       DB.getTransactions(),
       DB.getProducts(),
       DB.getSettings(),
       DB.getCashBoxState(),
+      DB.getCashBoxOperations(),
     ]);
     setTransactions(txns);
     setProducts(prods);
     setSettings(sett);
     setCashBox(cb);
+    // نستخرج إيداعات الأرباح من العمليات لاستخدامها مع الفلتر
+    const deposits = pd
+      .filter(op => op.type === 'profit_deposit')
+      .reduce((acc, op) => ({
+        syp: acc.syp + (op.currency === 'SYP' ? Math.abs(op.amount) : 0),
+        usd: acc.usd + (op.currency === 'USD' ? Math.abs(op.amount) : 0),
+        all: [...acc.all, op],
+      }), { syp: 0, usd: 0, all: [] as typeof pd });
+    setProfitDeposits(deposits);
     setLoading(false);
   };
 
@@ -69,9 +80,37 @@ export default function DashboardTab() {
       profitUSD += txn.profit_usd;
       profitSYP += txn.profit_syp;
     });
+
+    // فلترة إيداعات الأرباح حسب نفس الفترة الزمنية المختارة
+    const filteredDeposits = profitDeposits.all.filter(op => {
+      const date = parseISO(op.timestamp);
+      switch (filterType) {
+        case 'today': return isToday(date);
+        case 'week': return isThisWeek(date, { weekStartsOn: 6 });
+        case 'month': return isThisMonth(date);
+        case 'custom':
+          if (!customStart || !customEnd) return true;
+          return isWithinInterval(date, {
+            start: startOfDay(new Date(customStart)),
+            end: endOfDay(new Date(customEnd))
+          });
+        default: return true;
+      }
+    });
+
+    const depositUSD = filteredDeposits
+      .filter(op => op.currency === 'USD')
+      .reduce((s, op) => s + Math.abs(op.amount), 0);
+    const depositSYP = filteredDeposits
+      .filter(op => op.currency === 'SYP')
+      .reduce((s, op) => s + Math.abs(op.amount), 0);
+
+    // إضافة إيداعات الأرباح إلى صافي الربح
+    const netProfitUSD = profitUSD + depositUSD;
+    const netProfitSYP = profitSYP + depositSYP;
     const inventoryValueUSD = products.reduce((sum, p) => sum + (p.cost_usd * p.quantity), 0);
-    return { profitUSD, profitSYP, inventoryValueUSD };
-  }, [filteredTransactions, products]);
+    return { profitUSD: netProfitUSD, profitSYP: netProfitSYP, inventoryValueUSD };
+  }, [filteredTransactions, products, profitDeposits, filterType, customStart, customEnd]);
 
   const toggleRow = (id: string) => {
     const s = new Set(expandedRows);
