@@ -291,6 +291,34 @@ export const DB = {
   // ============================================================
 
   saveDebtRecord: async (debt: DebtRecord): Promise<boolean> => {
+    // تحقق هل يوجد دين غير مسدد لنفس العميل
+    const { data: existing } = await supabase
+      .from('debt_records')
+      .select('*')
+      .eq('customer_name', debt.customer_name)
+      .neq('status', 'paid')
+      .order('timestamp', { ascending: false })
+      .limit(1);
+
+    if (existing && existing.length > 0) {
+      const old = existing[0];
+      const mergedItems = [...(debt.items ?? []), ...(old.items ?? [])];
+      const newTotalSYP = Number(old.total_syp ?? 0) + debt.total_syp;
+      const newTotalUSD = Number(old.total_usd ?? 0) + debt.total_usd;
+      const { error } = await supabase
+        .from('debt_records')
+        .update({
+          items: mergedItems,
+          total_syp: newTotalSYP,
+          total_usd: newTotalUSD,
+          timestamp: debt.timestamp,
+          note: debt.note || old.note,
+        })
+        .eq('id', old.id);
+      if (error) { console.error('mergeDebtRecord error:', error); return false; }
+      return true;
+    }
+
     const { error } = await supabase
       .from('debt_records')
       .insert([{
