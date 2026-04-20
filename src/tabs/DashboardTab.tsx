@@ -1,11 +1,10 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { BarChart3, Calendar, ChevronDown, ChevronUp, TrendingUp, PackageSearch, ListOrdered, Landmark, DollarSign, ArrowDownCircle, FileText, X, Printer, Share2, Building2 } from 'lucide-react';
+import { BarChart3, Calendar, ChevronDown, ChevronUp, TrendingUp, PackageSearch, ListOrdered, Landmark, DollarSign, FileText, X, Printer, Share2, Building2 } from 'lucide-react';
 import { DB } from '../lib/db';
-import { Transaction, Product, CashBoxState } from '../lib/types';
+import { Transaction, Product, CashBoxState, Settings } from '../lib/types';
 import { formatCurrencySYP, formatCurrencyUSD, formatDate } from '../lib/utils';
 import { useToast } from '../components/Toast';
 import { isToday, isThisWeek, isThisMonth, isWithinInterval, parseISO, startOfDay, endOfDay } from 'date-fns';
-import { Settings } from '../lib/types';
 import html2canvas from 'html2canvas';
 
 type FilterType = 'today' | 'week' | 'month' | 'custom';
@@ -23,19 +22,10 @@ export default function DashboardTab() {
   const [customEnd, setCustomEnd] = useState('');
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
 
-  // سحب من الصندوق
-  const [withdrawCurrency, setWithdrawCurrency] = useState<'SYP' | 'USD'>('SYP');
-  const [withdrawAmount, setWithdrawAmount] = useState('');
-  const [withdrawNote, setWithdrawNote] = useState('');
-  const [withdrawing, setWithdrawing] = useState(false);
-
-  // سحب الأرباح
-  const [profitWithdrawCurrency, setProfitWithdrawCurrency] = useState<'SYP' | 'USD'>('SYP');
-  const [withdrawingProfit, setWithdrawingProfit] = useState(false);
-
   // عرض الفاتورة
   const [receiptTxn, setReceiptTxn] = useState<Transaction | null>(null);
   const hiddenReceiptRef = useRef<HTMLDivElement>(null);
+  const [sharingReceipt, setSharingReceipt] = useState(false);
 
   useEffect(() => { loadData(); }, []);
 
@@ -83,70 +73,59 @@ export default function DashboardTab() {
     return { profitUSD, profitSYP, inventoryValueUSD };
   }, [filteredTransactions, products]);
 
-  // الأرباح الكاملة (كل الوقت) للصندوقين
-  const totalProfitSYP = transactions.reduce((s, t) => s + t.profit_syp, 0);
-  const totalProfitUSD = transactions.reduce((s, t) => s + t.profit_usd, 0);
-
   const toggleRow = (id: string) => {
-    const newSet = new Set(expandedRows);
-    if (newSet.has(id)) newSet.delete(id); else newSet.add(id);
-    setExpandedRows(newSet);
+    const s = new Set(expandedRows);
+    if (s.has(id)) s.delete(id); else s.add(id);
+    setExpandedRows(s);
   };
 
-  const handleWithdraw = async () => {
-    const amount = parseFloat(withdrawAmount);
-    if (!amount || amount <= 0) { showToast('أدخل مبلغاً صحيحاً', 'error'); return; }
-    const balance = withdrawCurrency === 'SYP' ? cashBox.balance_syp : cashBox.balance_usd;
-    if (amount > balance) { showToast('المبلغ أكبر من رصيد الصندوق', 'error'); return; }
-    setWithdrawing(true);
-    const ok = await DB.withdrawFromCashBox(withdrawCurrency, amount, withdrawNote || 'سحب من الصندوق');
-    if (ok) {
-      showToast('تم السحب بنجاح', 'success');
-      setWithdrawAmount('');
-      setWithdrawNote('');
-      const cb = await DB.getCashBoxState();
-      setCashBox(cb);
-    } else {
-      showToast('حدث خطأ أثناء السحب', 'error');
-    }
-    setWithdrawing(false);
+  // ---- مشاركة الفاتورة ----
+  const waitForImages = (el: HTMLElement): Promise<void> => {
+    const imgs = Array.from(el.querySelectorAll('img'));
+    if (!imgs.length) return Promise.resolve();
+    return Promise.all(
+      imgs.map(img => img.complete ? Promise.resolve() : new Promise<void>(res => { img.onload = () => res(); img.onerror = () => res(); }))
+    ).then(() => {});
   };
 
-  const handleProfitWithdraw = async () => {
-    const amount = profitWithdrawCurrency === 'SYP' ? totalProfitSYP : totalProfitUSD;
-    if (amount <= 0) { showToast('لا توجد أرباح متاحة للسحب', 'warning'); return; }
-    const balance = profitWithdrawCurrency === 'SYP' ? cashBox.balance_syp : cashBox.balance_usd;
-    if (amount > balance) { showToast('الأرباح أكبر من رصيد الصندوق الحالي', 'warning'); return; }
-    setWithdrawingProfit(true);
-    const ok = await DB.withdrawFromCashBox(profitWithdrawCurrency, amount, 'سحب أرباح');
-    if (ok) {
-      showToast('تم سحب الأرباح بنجاح', 'success');
-      const cb = await DB.getCashBoxState();
-      setCashBox(cb);
-    } else {
-      showToast('حدث خطأ أثناء سحب الأرباح', 'error');
-    }
-    setWithdrawingProfit(false);
-  };
-
-  const shareReceipt = async () => {
-    if (!hiddenReceiptRef.current) return;
+  const shareReceipt = async (txn: Transaction) => {
+    setReceiptTxn(txn);
+    // نعطي الـ DOM وقتاً للرسم
+    await new Promise(r => setTimeout(r, 120));
+    const el = hiddenReceiptRef.current;
+    if (!el) { showToast('حدث خطأ في تحضير الفاتورة', 'error'); return; }
+    setSharingReceipt(true);
+    showToast('جاري تحضير الفاتورة...', 'info');
     try {
-      showToast('جاري تحضير الفاتورة...', 'info');
-      const canvas = await html2canvas(hiddenReceiptRef.current, {
-        scale: 2, useCORS: true, backgroundColor: '#ffffff',
-        foreignObjectRendering: false, logging: false, allowTaint: true,
+      await waitForImages(el);
+      const canvas = await html2canvas(el, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        foreignObjectRendering: false,
+        logging: false,
+        allowTaint: true,
+        removeContainer: true,
       });
-      canvas.toBlob(async (blob) => {
-        if (!blob) { showToast('حدث خطأ', 'error'); return; }
-        const filename = `invoice_${receiptTxn?.invoice_number}.png`;
-        const file = new File([blob], filename, { type: 'image/png' });
-        if (navigator.share && navigator.canShare && navigator.canShare({ files: [file] })) {
-          try { await navigator.share({ files: [file], title: 'فاتورة مبيعات' }); showToast('تمت المشاركة', 'success'); }
-          catch { downloadBlob(blob, filename); }
-        } else { downloadBlob(blob, filename); }
-      }, 'image/png', 0.95);
-    } catch { showToast('حدث خطأ أثناء المشاركة', 'error'); }
+      const blob = await new Promise<Blob | null>(res => canvas.toBlob(res, 'image/png', 0.95));
+      if (!blob) { showToast('فشل إنشاء الصورة', 'error'); setSharingReceipt(false); return; }
+      const filename = `invoice_${txn.invoice_number}.png`;
+      const file = new File([blob], filename, { type: 'image/png' });
+      if (navigator.share && navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file], title: `فاتورة #${txn.invoice_number}` });
+          showToast('تمت المشاركة بنجاح', 'success');
+        } catch (err: any) {
+          if (err?.name !== 'AbortError') downloadBlob(blob, filename);
+        }
+      } else {
+        downloadBlob(blob, filename);
+      }
+    } catch (err) {
+      console.error('shareReceipt error:', err);
+      showToast('حدث خطأ أثناء المشاركة', 'error');
+    }
+    setSharingReceipt(false);
   };
 
   const downloadBlob = (blob: Blob, filename: string) => {
@@ -156,7 +135,60 @@ export default function DashboardTab() {
     showToast('تم تحميل الفاتورة', 'success');
   };
 
-  const printReceipt = () => { window.print(); };
+  const printReceipt = () => window.print();
+
+  // مكوّن محتوى الفاتورة (مشترك بين العرض والطباعة/المشاركة)
+  const ReceiptContent = ({ txn }: { txn: Transaction }) => (
+    <div style={{ fontFamily: 'Arial, sans-serif', direction: 'rtl', padding: '20px', backgroundColor: '#fff', width: '100%' }}>
+      <div style={{ textAlign: 'center', marginBottom: '16px' }}>
+        <div style={{ fontSize: '16px', fontWeight: 'bold', color: '#111' }}>{settings?.company_name ?? 'وتين تك'}</div>
+        <div style={{ fontSize: '11px', color: '#666', marginTop: '2px' }}>فاتورة مبيعات</div>
+        <div style={{ marginTop: '10px', borderTop: '1px dashed #ccc', paddingTop: '10px', display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#555' }}>
+          <span>رقم: {txn.invoice_number}</span>
+          <span style={{ direction: 'ltr' }}>{formatDate(txn.timestamp)}</span>
+        </div>
+      </div>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '12px', textAlign: 'right' }}>
+        <thead>
+          <tr style={{ borderBottom: '1px solid #e5e7eb', color: '#6b7280' }}>
+            <th style={{ padding: '6px 0', fontWeight: '600' }}>المنتج</th>
+            <th style={{ padding: '6px 0', textAlign: 'center', width: '36px', fontWeight: '600' }}>الكمية</th>
+            <th style={{ padding: '6px 0', fontWeight: '600' }}>المجموع</th>
+          </tr>
+        </thead>
+        <tbody>
+          {txn.items.map((item, idx) => (
+            <tr key={idx} style={{ borderBottom: '1px solid #f3f4f6' }}>
+              <td style={{ padding: '7px 0', fontWeight: '600', color: '#1f2937' }}>{item.name}</td>
+              <td style={{ padding: '7px 0', textAlign: 'center', fontWeight: 'bold', color: '#4b5563' }}>{item.qty}</td>
+              <td style={{ padding: '7px 0', fontWeight: 'bold', color: '#4f46e5' }}>
+                {item.currency === 'USD'
+                  ? formatCurrencyUSD(item.subtotal_usd)
+                  : item.subtotal_syp.toLocaleString('en-US') + ' ل.س'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <div style={{ borderTop: '1px solid #d1d5db', paddingTop: '10px', marginTop: '4px' }}>
+        {txn.cash_syp > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <span style={{ fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>إجمالي ل.س</span>
+            <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#111' }}>{formatCurrencySYP(txn.cash_syp)}</span>
+          </div>
+        )}
+        {txn.cash_usd > 0 && (
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px' }}>
+            <span style={{ fontSize: '12px', color: '#6b7280', fontWeight: '600' }}>إجمالي $</span>
+            <span style={{ fontSize: '14px', fontWeight: 'bold', color: '#111' }}>{formatCurrencyUSD(txn.cash_usd)}</span>
+          </div>
+        )}
+        <div style={{ fontSize: '10px', color: '#9ca3af', marginTop: '4px' }}>
+          سعر الصرف: {txn.exchange_rate_at_sale.toLocaleString('en-US')}
+        </div>
+      </div>
+    </div>
+  );
 
   return (
     <div className="flex flex-col relative h-full">
@@ -202,7 +234,6 @@ export default function DashboardTab() {
           <>
             {/* STATS CARDS */}
             <div className="grid grid-cols-2 gap-2.5">
-              {/* الصندوق السوري */}
               <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-1 h-full bg-green-500" />
                 <div className="flex justify-between items-start mb-1.5">
@@ -213,7 +244,6 @@ export default function DashboardTab() {
                 <div className="text-[10px] text-gray-400 mt-0.5">مبيعات - سحوبات</div>
               </div>
 
-              {/* الصندوق الدولاري */}
               <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-1 h-full bg-blue-500" />
                 <div className="flex justify-between items-start mb-1.5">
@@ -224,7 +254,6 @@ export default function DashboardTab() {
                 <div className="text-[10px] text-gray-400 mt-0.5">مبيعات - سحوبات</div>
               </div>
 
-              {/* صافي الربح */}
               <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-1 h-full bg-success" />
                 <div className="flex justify-between items-start mb-1.5">
@@ -235,7 +264,6 @@ export default function DashboardTab() {
                 <div className="text-[10px] text-gray-400 mt-0.5">{formatCurrencySYP(stats.profitSYP)}</div>
               </div>
 
-              {/* قيمة المخزون */}
               <div className="bg-white p-3 rounded-xl shadow-sm border border-gray-100 relative overflow-hidden">
                 <div className="absolute top-0 right-0 w-1 h-full bg-warning" />
                 <div className="flex justify-between items-start mb-1.5">
@@ -244,86 +272,6 @@ export default function DashboardTab() {
                 </div>
                 <div className="text-sm font-black text-gray-900 truncate">{formatCurrencyUSD(stats.inventoryValueUSD)}</div>
               </div>
-            </div>
-
-            {/* WITHDRAW CARD */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <h3 className="font-bold text-sm text-gray-800 flex items-center gap-1.5 mb-3">
-                <ArrowDownCircle size={16} className="text-primary" /> سحب من الصندوق
-              </h3>
-              {/* Tab selector */}
-              <div className="flex bg-gray-100 rounded-lg p-0.5 mb-3">
-                <button
-                  onClick={() => setWithdrawCurrency('SYP')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${withdrawCurrency === 'SYP' ? 'bg-green-500 text-white shadow' : 'text-gray-500'}`}
-                >ل.س</button>
-                <button
-                  onClick={() => setWithdrawCurrency('USD')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${withdrawCurrency === 'USD' ? 'bg-blue-500 text-white shadow' : 'text-gray-500'}`}
-                >$</button>
-              </div>
-              <div className="text-xs text-gray-500 mb-2 font-medium">
-                الرصيد المتاح: <span className="font-bold text-gray-800">
-                  {withdrawCurrency === 'SYP' ? formatCurrencySYP(cashBox.balance_syp) : formatCurrencyUSD(cashBox.balance_usd)}
-                </span>
-              </div>
-              <div className="flex flex-col gap-2">
-                <input
-                  type="number"
-                  value={withdrawAmount}
-                  onChange={e => setWithdrawAmount(e.target.value)}
-                  placeholder={`المبلغ ${withdrawCurrency === 'SYP' ? '(ل.س)' : '($)'}`}
-                  className="w-full h-10 px-3 rounded-xl border border-gray-200 focus:border-primary focus:ring-1 focus:ring-primary outline-none text-sm"
-                />
-                <input
-                  type="text"
-                  value={withdrawNote}
-                  onChange={e => setWithdrawNote(e.target.value)}
-                  placeholder="ملاحظة (اختياري)"
-                  className="w-full h-10 px-3 rounded-xl border border-gray-200 focus:border-primary focus:ring-1 focus:ring-primary outline-none text-sm"
-                />
-                <button
-                  onClick={handleWithdraw}
-                  disabled={withdrawing || !withdrawAmount}
-                  className="w-full h-10 bg-primary text-white font-bold text-sm rounded-xl disabled:opacity-60 flex items-center justify-center gap-1.5"
-                >
-                  {withdrawing ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'تأكيد السحب'}
-                </button>
-              </div>
-            </div>
-
-            {/* PROFIT WITHDRAW CARD */}
-            <div className="bg-white rounded-xl shadow-sm border border-gray-100 p-4">
-              <h3 className="font-bold text-sm text-gray-800 flex items-center gap-1.5 mb-3">
-                <TrendingUp size={16} className="text-success" /> سحب الأرباح
-              </h3>
-              <div className="flex bg-gray-100 rounded-lg p-0.5 mb-3">
-                <button
-                  onClick={() => setProfitWithdrawCurrency('SYP')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${profitWithdrawCurrency === 'SYP' ? 'bg-green-500 text-white shadow' : 'text-gray-500'}`}
-                >ل.س</button>
-                <button
-                  onClick={() => setProfitWithdrawCurrency('USD')}
-                  className={`flex-1 py-1.5 text-xs font-bold rounded-md transition-all ${profitWithdrawCurrency === 'USD' ? 'bg-blue-500 text-white shadow' : 'text-gray-500'}`}
-                >$</button>
-              </div>
-              <div className="bg-green-50 rounded-xl p-3 mb-3 text-xs text-green-700">
-                <div className="font-bold mb-1">إجمالي الأرباح المتراكمة:</div>
-                <div>ل.س: {formatCurrencySYP(totalProfitSYP)}</div>
-                <div>$: {formatCurrencyUSD(totalProfitUSD)}</div>
-              </div>
-              <div className="text-xs text-gray-600 mb-3 font-medium">
-                سيتم سحب: <span className="font-bold text-gray-900">
-                  {profitWithdrawCurrency === 'SYP' ? formatCurrencySYP(totalProfitSYP) : formatCurrencyUSD(totalProfitUSD)}
-                </span> من الصندوق {profitWithdrawCurrency === 'SYP' ? 'السوري' : 'الدولاري'}
-              </div>
-              <button
-                onClick={handleProfitWithdraw}
-                disabled={withdrawingProfit}
-                className="w-full h-10 bg-success text-white font-bold text-sm rounded-xl disabled:opacity-60 flex items-center justify-center gap-1.5"
-              >
-                {withdrawingProfit ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'سحب الأرباح'}
-              </button>
             </div>
 
             {/* SALES TABLE */}
@@ -340,7 +288,7 @@ export default function DashboardTab() {
                     <p className="font-semibold text-xs">لا توجد مبيعات في هذه الفترة</p>
                   </div>
                 ) : (
-                  <table className="w-full text-right text-xs border-collapse min-w-[520px]">
+                  <table className="w-full text-right text-xs border-collapse min-w-[480px]">
                     <thead>
                       <tr className="bg-gray-50/50 border-b border-gray-100 text-gray-500">
                         <th className="py-2.5 px-3 font-bold"># رقم</th>
@@ -348,7 +296,7 @@ export default function DashboardTab() {
                         <th className="py-2.5 px-3 font-bold">ل.س</th>
                         <th className="py-2.5 px-3 font-bold">$</th>
                         <th className="py-2.5 px-3 font-bold">الربح</th>
-                        <th className="py-2.5 px-3 font-bold text-center">📄</th>
+                        <th className="py-2.5 px-2 font-bold text-center">فاتورة</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -357,10 +305,7 @@ export default function DashboardTab() {
                         return (
                           <React.Fragment key={txn.id}>
                             <tr className={`border-b border-gray-50 hover:bg-primary-light/30 transition-colors ${isExpanded ? 'bg-primary-light/20' : ''}`}>
-                              <td
-                                className="py-3 px-3 font-bold text-gray-900 cursor-pointer"
-                                onClick={() => toggleRow(txn.id)}
-                              >
+                              <td className="py-3 px-3 font-bold text-gray-900 cursor-pointer" onClick={() => toggleRow(txn.id)}>
                                 <div className="flex items-center gap-1.5">
                                   {isExpanded ? <ChevronUp size={14} className="text-primary" /> : <ChevronDown size={14} className="text-gray-400" />}
                                   #{txn.invoice_number}
@@ -374,10 +319,12 @@ export default function DashboardTab() {
                                 {txn.cash_usd > 0 ? `$${txn.cash_usd.toFixed(2)}` : '—'}
                               </td>
                               <td className="py-3 px-3 font-bold text-success cursor-pointer" onClick={() => toggleRow(txn.id)}>${txn.profit_usd.toFixed(2)}</td>
-                              <td className="py-3 px-3 text-center">
+                              {/* زر رؤية الفاتورة */}
+                              <td className="py-3 px-2 text-center">
                                 <button
                                   onClick={() => setReceiptTxn(txn)}
-                                  className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-gray-50 hover:bg-primary-light text-gray-500 hover:text-primary transition-colors border border-gray-100"
+                                  className="inline-flex items-center justify-center w-7 h-7 rounded-lg bg-primary-light/50 hover:bg-primary text-primary hover:text-white transition-colors border border-primary/20"
+                                  title="رؤية الفاتورة"
                                 >
                                   <FileText size={13} />
                                 </button>
@@ -391,7 +338,7 @@ export default function DashboardTab() {
                                       <thead>
                                         <tr className="text-gray-400 border-b border-gray-200">
                                           <th className="py-1 font-semibold">الصنف</th>
-                                          <th className="py-1 font-semibold text-center">الكمية</th>
+                                          <th className="py-1 text-center font-semibold">الكمية</th>
                                           <th className="py-1 font-semibold">العملة</th>
                                           <th className="py-1 font-semibold">المجموع</th>
                                         </tr>
@@ -429,16 +376,16 @@ export default function DashboardTab() {
         )}
       </div>
 
-      {/* RECEIPT MODAL */}
+      {/* ====== RECEIPT MODAL ====== */}
       {receiptTxn && (
         <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/60 p-4">
+          {/* بطاقة الفاتورة المرئية */}
           <div className="bg-white w-full max-w-[340px] rounded-xl shadow-xl overflow-hidden">
-            {/* Header */}
-            <div className="flex justify-between items-center px-4 py-3 border-b border-gray-100">
-              <span className="font-bold text-sm text-gray-800">الفاتورة #{receiptTxn.invoice_number}</span>
+            <div className="flex justify-between items-center px-4 py-3 border-b border-gray-100 bg-gray-50">
+              <span className="font-bold text-sm text-gray-800">فاتورة #{receiptTxn.invoice_number}</span>
               <button onClick={() => setReceiptTxn(null)} className="text-gray-400 hover:text-gray-600 p-1 rounded-lg"><X size={18} /></button>
             </div>
-            {/* Content */}
+            {/* نعرض المحتوى بـ Tailwind للعرض المرئي */}
             <div className="p-5">
               <div className="text-center mb-4">
                 <Building2 size={22} className="mx-auto text-gray-700 mb-1" />
@@ -482,54 +429,45 @@ export default function DashboardTab() {
                     <span>{formatCurrencyUSD(receiptTxn.cash_usd)}</span>
                   </div>
                 )}
+                <div className="text-[10px] text-gray-400 mt-1">سعر الصرف: {receiptTxn.exchange_rate_at_sale.toLocaleString('en-US')}</div>
               </div>
             </div>
           </div>
+
+          {/* أزرار */}
           <div className="w-full max-w-[340px] mt-3 flex gap-2">
-            <button onClick={printReceipt} className="flex-1 bg-white text-gray-700 font-bold h-10 rounded-lg flex items-center justify-center gap-1.5 text-sm shadow">
+            <button onClick={printReceipt} className="flex-1 bg-white text-gray-700 font-bold h-10 rounded-lg flex items-center justify-center gap-1.5 text-sm shadow border border-gray-200">
               <Printer size={15} /> طباعة
             </button>
-            <button onClick={shareReceipt} className="flex-1 bg-success text-white font-bold h-10 rounded-lg flex items-center justify-center gap-1.5 text-sm shadow">
-              <Share2 size={15} /> مشاركة
+            <button
+              onClick={() => shareReceipt(receiptTxn)}
+              disabled={sharingReceipt}
+              className="flex-1 bg-success text-white font-bold h-10 rounded-lg flex items-center justify-center gap-1.5 text-sm shadow disabled:opacity-60"
+            >
+              {sharingReceipt
+                ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                : <><Share2 size={15} /> مشاركة</>}
             </button>
-            <button onClick={() => setReceiptTxn(null)} className="flex-none px-4 bg-gray-800 text-white font-bold h-10 rounded-lg text-sm shadow">
-              إغلاق
-            </button>
+            <button onClick={() => setReceiptTxn(null)} className="flex-none px-4 bg-gray-800 text-white font-bold h-10 rounded-lg text-sm shadow">إغلاق</button>
           </div>
         </div>
       )}
 
-      {/* Hidden element for share */}
-      {receiptTxn && (
-        <div ref={hiddenReceiptRef} style={{ position: 'absolute', left: '-9999px', top: 0, width: '340px', zIndex: -1 }} dir="rtl">
-          <div className="bg-white p-5">
-            <div className="text-center mb-4">
-              <div className="font-bold text-base text-gray-900">{settings?.company_name}</div>
-              <div className="text-gray-500 text-xs">فاتورة مبيعات</div>
-              <div className="mt-2 border-t border-dashed border-gray-300 pt-2 flex justify-between text-[11px] text-gray-500">
-                <span>#{receiptTxn.invoice_number}</span>
-                <span dir="ltr">{formatDate(receiptTxn.timestamp)}</span>
-              </div>
-            </div>
-            <table className="w-full text-right text-xs mb-3">
-              <thead><tr className="border-b border-gray-200"><th className="py-1">المنتج</th><th className="py-1 text-center">الكمية</th><th className="py-1">المجموع</th></tr></thead>
-              <tbody>
-                {receiptTxn.items.map((item, idx) => (
-                  <tr key={idx} className="border-b border-gray-50">
-                    <td className="py-1.5 font-semibold">{item.name}</td>
-                    <td className="py-1.5 text-center">{item.qty}</td>
-                    <td className="py-1.5 font-bold">{item.currency === 'USD' ? `$${item.subtotal_usd.toFixed(2)}` : `${item.subtotal_syp.toLocaleString('en-US')} ل.س`}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-            <div className="border-t pt-2">
-              {receiptTxn.cash_syp > 0 && <div className="flex justify-between text-xs font-bold mb-1"><span>الإجمالي ل.س</span><span>{formatCurrencySYP(receiptTxn.cash_syp)}</span></div>}
-              {receiptTxn.cash_usd > 0 && <div className="flex justify-between text-xs font-bold"><span>الإجمالي $</span><span>{formatCurrencyUSD(receiptTxn.cash_usd)}</span></div>}
-            </div>
-          </div>
-        </div>
-      )}
+      {/* عنصر مخفي للطباعة والمشاركة — inline styles فقط لـ html2canvas */}
+      <div
+        ref={hiddenReceiptRef}
+        style={{
+          position: 'fixed',
+          top: '-9999px',
+          left: '-9999px',
+          width: '340px',
+          zIndex: -999,
+          pointerEvents: 'none',
+          visibility: 'hidden',
+        }}
+      >
+        {receiptTxn && <ReceiptContent txn={receiptTxn} />}
+      </div>
     </div>
   );
 }
