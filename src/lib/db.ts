@@ -1,6 +1,6 @@
 // ===== SUPABASE DATABASE LAYER =====
 import { createClient } from '@supabase/supabase-js';
-import { Product, Transaction, TransactionItem, Settings } from './types';
+import { Product, Transaction, TransactionItem, Settings, CashBoxState, CashBoxOperation, DebtRecord } from './types';
 
 // المتغيرات البيئية
 const SUPABASE_URL = import.meta.env.VITE_url as string;
@@ -124,6 +124,8 @@ export const DB = {
       profit_usd: Number(row.profit_usd),
       profit_syp: Number(row.profit_syp),
       exchange_rate_at_sale: Number(row.exchange_rate_at_sale),
+      cash_syp: Number(row.cash_syp ?? 0),
+      cash_usd: Number(row.cash_usd ?? 0),
       items: (row.transaction_items ?? []).map((ti: any) => ({
         product_id: ti.product_id,
         name: ti.name,
@@ -133,6 +135,7 @@ export const DB = {
         price_syp: Number(ti.price_syp),
         subtotal_syp: Number(ti.subtotal_syp),
         subtotal_usd: Number(ti.subtotal_usd),
+        currency: (ti.currency ?? 'SYP') as 'SYP' | 'USD',
       })) as TransactionItem[],
     }));
   },
@@ -161,6 +164,8 @@ export const DB = {
         profit_usd: transaction.profit_usd,
         profit_syp: transaction.profit_syp,
         exchange_rate_at_sale: transaction.exchange_rate_at_sale,
+        cash_syp: transaction.cash_syp,
+        cash_usd: transaction.cash_usd,
       }]);
 
     if (txnError) {
@@ -179,6 +184,7 @@ export const DB = {
       price_syp: item.price_syp,
       subtotal_syp: item.subtotal_syp,
       subtotal_usd: item.subtotal_usd,
+      currency: item.currency,
     }));
 
     const { error: itemsError } = await supabase
@@ -202,6 +208,164 @@ export const DB = {
 
     if (error) {
       console.error('deleteAllTransactions error:', error);
+      return false;
+    }
+    return true;
+  },
+
+  // ============================================================
+  // CASH BOX (الصندوقان)
+  // ============================================================
+
+  // جلب رصيد الصندوقين (مجموع المبيعات - السحوبات)
+  getCashBoxState: async (): Promise<CashBoxState> => {
+    // مجموع المبيعات من جدول transactions
+    const { data: txns } = await supabase
+      .from('transactions')
+      .select('cash_syp, cash_usd');
+
+    // مجموع السحوبات من جدول cash_box_withdrawals
+    const { data: withdrawals } = await supabase
+      .from('cash_box_withdrawals')
+      .select('currency, amount');
+
+    let balance_syp = 0;
+    let balance_usd = 0;
+
+    (txns ?? []).forEach((t: any) => {
+      balance_syp += Number(t.cash_syp ?? 0);
+      balance_usd += Number(t.cash_usd ?? 0);
+    });
+
+    (withdrawals ?? []).forEach((w: any) => {
+      if (w.currency === 'SYP') balance_syp -= Number(w.amount ?? 0);
+      else if (w.currency === 'USD') balance_usd -= Number(w.amount ?? 0);
+    });
+
+    return { balance_syp, balance_usd };
+  },
+
+  // سجل سحب من الصندوق
+  withdrawFromCashBox: async (currency: 'SYP' | 'USD', amount: number, note: string): Promise<boolean> => {
+    const { error } = await supabase
+      .from('cash_box_withdrawals')
+      .insert([{
+        id: 'wdw_' + Date.now(),
+        currency,
+        amount,
+        note,
+        timestamp: new Date().toISOString(),
+      }]);
+
+    if (error) {
+      console.error('withdrawFromCashBox error:', error);
+      return false;
+    }
+    return true;
+  },
+
+  // جلب سجل عمليات الصندوق
+  getCashBoxOperations: async (): Promise<CashBoxOperation[]> => {
+    const { data, error } = await supabase
+      .from('cash_box_withdrawals')
+      .select('*')
+      .order('timestamp', { ascending: false });
+
+    if (error) {
+      console.error('getCashBoxOperations error:', error);
+      return [];
+    }
+
+    return (data ?? []).map((row: any) => ({
+      id: row.id,
+      type: (row.type ?? 'withdrawal') as CashBoxOperation['type'],
+      currency: row.currency as 'SYP' | 'USD',
+      amount: Number(row.amount),
+      note: row.note,
+      timestamp: row.timestamp,
+    }));
+  },
+
+  // ============================================================
+  // DEBT RECORDS (دفتر الدين)
+  // ============================================================
+
+  saveDebtRecord: async (debt: DebtRecord): Promise<boolean> => {
+    const { error } = await supabase
+      .from('debt_records')
+      .insert([{
+        id: debt.id,
+        invoice_number: debt.invoice_number,
+        customer_name: debt.customer_name,
+        note: debt.note,
+        timestamp: debt.timestamp,
+        items: debt.items,
+        total_syp: debt.total_syp,
+        total_usd: debt.total_usd,
+        paid_syp: debt.paid_syp,
+        paid_usd: debt.paid_usd,
+        status: debt.status,
+      }]);
+
+    if (error) {
+      console.error('saveDebtRecord error:', error);
+      return false;
+    }
+    return true;
+  },
+
+  getDebtRecords: async (): Promise<DebtRecord[]> => {
+    const { data, error } = await supabase
+      .from('debt_records')
+      .select('*')
+      .order('timestamp', { ascending: false });
+
+    if (error) {
+      console.error('getDebtRecords error:', error);
+      return [];
+    }
+
+    return (data ?? []).map((row: any) => ({
+      id: row.id,
+      invoice_number: row.invoice_number,
+      customer_name: row.customer_name,
+      note: row.note,
+      timestamp: row.timestamp,
+      items: row.items ?? [],
+      total_syp: Number(row.total_syp ?? 0),
+      total_usd: Number(row.total_usd ?? 0),
+      paid_syp: Number(row.paid_syp ?? 0),
+      paid_usd: Number(row.paid_usd ?? 0),
+      status: row.status as DebtRecord['status'],
+    }));
+  },
+
+  updateDebtPayment: async (
+    id: string,
+    paid_syp: number,
+    paid_usd: number,
+    status: DebtRecord['status']
+  ): Promise<boolean> => {
+    const { error } = await supabase
+      .from('debt_records')
+      .update({ paid_syp, paid_usd, status })
+      .eq('id', id);
+
+    if (error) {
+      console.error('updateDebtPayment error:', error);
+      return false;
+    }
+    return true;
+  },
+
+  deleteDebtRecord: async (id: string): Promise<boolean> => {
+    const { error } = await supabase
+      .from('debt_records')
+      .delete()
+      .eq('id', id);
+
+    if (error) {
+      console.error('deleteDebtRecord error:', error);
       return false;
     }
     return true;
@@ -256,6 +420,8 @@ export const DB = {
   wipeAll: async (): Promise<boolean> => {
     await supabase.from('transactions').delete().neq('id', '');
     await supabase.from('products').delete().neq('id', '');
+    await supabase.from('cash_box_withdrawals').delete().neq('id', '');
+    await supabase.from('debt_records').delete().neq('id', '');
     await supabase.from('settings').upsert({
       id: 1,
       exchange_rate: 1600,
