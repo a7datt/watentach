@@ -7,6 +7,7 @@ import { formatDate, formatCurrencySYP, formatCurrencyUSD } from '../lib/utils';
 
 type ModalType = 'import' | 'delete_txns' | 'wipe_all'
   | 'withdraw_syp' | 'withdraw_usd' | 'withdraw_profit'
+  | 'deposit_syp' | 'deposit_usd' | 'deposit_profit'
   | 'operations_log' | null;
 
 export default function SettingsTab() {
@@ -35,6 +36,12 @@ export default function SettingsTab() {
   const [profitCurrency, setProfitCurrency] = useState<'SYP' | 'USD'>('SYP');
   const [profitLoading, setProfitLoading] = useState(false);
 
+  // إيداع في الصندوق
+  const [depositProfitAmount, setDepositProfitAmount] = useState('');
+  const [depositProfitCurrency, setDepositProfitCurrency] = useState<'SYP' | 'USD'>('SYP');
+  const [depositProfitNote, setDepositProfitNote] = useState('');
+  const [depositProfitLoading, setDepositProfitLoading] = useState(false);
+
   // إجمالي الأرباح (كل الوقت)
   const [totalProfitSYP, setTotalProfitSYP] = useState(0);
   const [totalProfitUSD, setTotalProfitUSD] = useState(0);
@@ -56,6 +63,9 @@ export default function SettingsTab() {
     setWdAmount('');
     setWdNote('');
     setWipeConfirmation('');
+    setDepositProfitAmount('');
+    setDepositProfitNote('');
+    setDepositProfitCurrency('SYP');
     setModalType(type);
   };
 
@@ -77,6 +87,39 @@ export default function SettingsTab() {
       showToast('حدث خطأ أثناء السحب', 'error');
     }
     setWdLoading(false);
+  };
+
+  // ---- إيداع عادي (لا يحسب كربح) ----
+  const handleDeposit = async (currency: 'SYP' | 'USD') => {
+    const amount = parseFloat(wdAmount);
+    if (!amount || amount <= 0) { showToast('أدخل مبلغاً صحيحاً', 'error'); return; }
+    setWdLoading(true);
+    // الإيداع = سحب بمبلغ سالب
+    const ok = await DB.withdrawFromCashBox(currency, -amount, wdNote || `إيداع في الصندوق ${currency === 'SYP' ? 'السوري' : 'الدولاري'}`);
+    if (ok) {
+      showToast('تم الإيداع بنجاح ✓', 'success');
+      closeModal();
+      await loadAll();
+    } else {
+      showToast('حدث خطأ أثناء الإيداع', 'error');
+    }
+    setWdLoading(false);
+  };
+
+  // ---- إيداع أرباح ----
+  const handleDepositProfit = async () => {
+    const amount = parseFloat(depositProfitAmount);
+    if (!amount || amount <= 0) { showToast('أدخل مبلغاً صحيحاً', 'error'); return; }
+    setDepositProfitLoading(true);
+    const ok = await DB.withdrawFromCashBox(depositProfitCurrency, -amount, depositProfitNote || 'إيداع أرباح');
+    if (ok) {
+      showToast('تم إيداع الأرباح بنجاح ✓', 'success');
+      closeModal();
+      await loadAll();
+    } else {
+      showToast('حدث خطأ أثناء الإيداع', 'error');
+    }
+    setDepositProfitLoading(false);
   };
 
   // ---- سحب الأرباح ----
@@ -296,12 +339,38 @@ export default function SettingsTab() {
               <TrendingUp size={16} className="text-emerald-600" /> سحب الأرباح
             </button>
 
+            <div className="border-t border-gray-100 my-1" />
+
+            {/* إيداع في الصندوق السوري */}
+            <button
+              onClick={() => openModal('deposit_syp')}
+              className="w-full h-11 bg-green-50 border border-green-200 text-green-800 font-bold rounded-xl flex items-center justify-center gap-2 text-sm hover:bg-green-100 transition-colors"
+            >
+              <Landmark size={16} className="text-green-600" /> إيداع في الصندوق السوري
+            </button>
+
+            {/* إيداع في الصندوق الدولاري */}
+            <button
+              onClick={() => openModal('deposit_usd')}
+              className="w-full h-11 bg-blue-50 border border-blue-200 text-blue-800 font-bold rounded-xl flex items-center justify-center gap-2 text-sm hover:bg-blue-100 transition-colors"
+            >
+              <DollarSign size={16} className="text-blue-600" /> إيداع في الصندوق الدولاري
+            </button>
+
+            {/* إيداع أرباح */}
+            <button
+              onClick={() => openModal('deposit_profit')}
+              className="w-full h-11 bg-purple-50 border border-purple-200 text-purple-800 font-bold rounded-xl flex items-center justify-center gap-2 text-sm hover:bg-purple-100 transition-colors"
+            >
+              <TrendingUp size={16} className="text-purple-600" /> إيداع أرباح
+            </button>
+
             {/* سجل السحوبات */}
             <button
               onClick={openOperationsLog}
               className="w-full h-11 bg-gray-50 border border-gray-200 text-gray-700 font-bold rounded-xl flex items-center justify-center gap-2 text-sm hover:bg-gray-100 transition-colors"
             >
-              <ScrollText size={16} className="text-gray-500" /> سجلات السحوبات
+              <ScrollText size={16} className="text-gray-500" /> سجلات العمليات
             </button>
           </div>
         </div>
@@ -321,8 +390,8 @@ export default function SettingsTab() {
         </div>
 
         {/* DANGER ZONE */}
-        <div className="bg-white rounded-xl shadow-sm border border-red-200 p-4 flex flex-col gap-2.5 relative overflow-hidden">
-          <div className="absolute top-0 right-0 w-1 h-full bg-danger" />
+        <div className="bg-white rounded-xl shadow-sm border border-red-200 p-4 flex flex-col gap-2.5 relative">
+          <div className="absolute top-0 right-0 w-1 h-full bg-danger rounded-r-xl" />
           <h3 className="text-sm font-bold text-danger mb-1 flex items-center gap-1.5">
             <AlertTriangle size={16} /> منطقة الخطر
           </h3>
@@ -345,6 +414,97 @@ export default function SettingsTab() {
 
             {/* سحب من الدولاري */}
             {modalType === 'withdraw_usd' && <WithdrawModalBody currency="USD" />}
+
+            {/* إيداع في السوري */}
+            {(modalType === 'deposit_syp' || modalType === 'deposit_usd') && (() => {
+              const currency = modalType === 'deposit_syp' ? 'SYP' : 'USD';
+              const label = currency === 'SYP' ? 'الصندوق السوري' : 'الصندوق الدولاري';
+              const unit = currency === 'SYP' ? 'ل.س' : '$';
+              const color = currency === 'SYP' ? 'text-green-700' : 'text-blue-700';
+              const balance = currency === 'SYP' ? cashBox.balance_syp : cashBox.balance_usd;
+              const balanceStr = currency === 'SYP' ? formatCurrencySYP(balance) : formatCurrencyUSD(balance);
+              return (
+                <>
+                  <div className="text-3xl mx-auto mb-1 text-center">{currency === 'SYP' ? '🏦' : '💵'}</div>
+                  <h3 className="text-base font-bold text-gray-900 text-center mb-1">إيداع في {label}</h3>
+                  <div className={`text-center text-sm font-bold ${color} mb-1`}>الرصيد الحالي: {balanceStr}</div>
+                  <div className="text-center text-[10px] text-gray-400 mb-4 bg-gray-50 rounded-lg px-2 py-1">⚡ الإيداع لا يُحسب كربح</div>
+                  <div className="flex flex-col gap-3">
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 mb-1 block">المبلغ ({unit}) *</label>
+                      <div className="relative">
+                        <input type="number" value={wdAmount} onChange={e => setWdAmount(e.target.value)}
+                          placeholder="0" autoFocus
+                          className="w-full h-11 px-3 pl-12 rounded-xl border-2 border-gray-200 focus:border-primary outline-none text-sm font-bold" />
+                        <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">{unit}</span>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-bold text-gray-500 mb-1 block">ملاحظة (اختياري)</label>
+                      <input type="text" value={wdNote} onChange={e => setWdNote(e.target.value)}
+                        placeholder="سبب الإيداع..."
+                        className="w-full h-10 px-3 rounded-xl border border-gray-200 focus:border-primary outline-none text-sm" />
+                    </div>
+                    <div className="flex gap-2 mt-1">
+                      <button onClick={closeModal} className="flex-1 h-10 bg-gray-100 text-gray-700 font-bold text-sm rounded-xl">إلغاء</button>
+                      <button onClick={() => handleDeposit(currency)} disabled={wdLoading || !wdAmount}
+                        className="flex-1 h-10 bg-primary text-white font-bold text-sm rounded-xl shadow disabled:opacity-60 flex items-center justify-center gap-1.5">
+                        {wdLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'تأكيد الإيداع'}
+                      </button>
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
+
+            {/* إيداع أرباح */}
+            {modalType === 'deposit_profit' && (
+              <>
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="font-bold text-base text-gray-900 flex items-center gap-1.5">
+                    <TrendingUp size={18} className="text-purple-600" /> إيداع أرباح
+                  </h3>
+                  <button onClick={closeModal} className="text-gray-400 p-1 rounded-lg"><X size={18} /></button>
+                </div>
+                <div className="text-center text-[10px] text-gray-400 mb-3 bg-purple-50 rounded-lg px-2 py-1.5 border border-purple-100">
+                  💰 إيداع أرباح خارجية في الصندوق
+                </div>
+                <div className="flex bg-gray-100 rounded-xl p-1 mb-4">
+                  <button onClick={() => setDepositProfitCurrency('SYP')}
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${depositProfitCurrency === 'SYP' ? 'bg-green-500 text-white shadow-sm' : 'text-gray-500'}`}>
+                    🏦 ليرة سورية
+                  </button>
+                  <button onClick={() => setDepositProfitCurrency('USD')}
+                    className={`flex-1 py-2 text-xs font-bold rounded-lg transition-all ${depositProfitCurrency === 'USD' ? 'bg-blue-500 text-white shadow-sm' : 'text-gray-500'}`}>
+                    💵 دولار
+                  </button>
+                </div>
+                <div className="flex flex-col gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 mb-1 block">المبلغ ({depositProfitCurrency === 'SYP' ? 'ل.س' : '$'}) *</label>
+                    <div className="relative">
+                      <input type="number" value={depositProfitAmount} onChange={e => setDepositProfitAmount(e.target.value)}
+                        placeholder="0" autoFocus
+                        className="w-full h-11 px-3 pl-12 rounded-xl border-2 border-gray-200 focus:border-purple-400 outline-none text-sm font-bold" />
+                      <span className="absolute left-3 top-1/2 -translate-y-1/2 text-xs font-bold text-gray-400">{depositProfitCurrency === 'SYP' ? 'ل.س' : '$'}</span>
+                    </div>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 mb-1 block">ملاحظة (اختياري)</label>
+                    <input type="text" value={depositProfitNote} onChange={e => setDepositProfitNote(e.target.value)}
+                      placeholder="مصدر الأرباح..."
+                      className="w-full h-10 px-3 rounded-xl border border-gray-200 focus:border-purple-400 outline-none text-sm" />
+                  </div>
+                  <div className="flex gap-2 mt-1">
+                    <button onClick={closeModal} className="flex-1 h-10 bg-gray-100 text-gray-700 font-bold text-sm rounded-xl">إلغاء</button>
+                    <button onClick={handleDepositProfit} disabled={depositProfitLoading || !depositProfitAmount}
+                      className="flex-1 h-10 bg-purple-500 text-white font-bold text-sm rounded-xl shadow disabled:opacity-60 flex items-center justify-center gap-1.5">
+                      {depositProfitLoading ? <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> : 'تأكيد الإيداع'}
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
 
             {/* سحب الأرباح */}
             {modalType === 'withdraw_profit' && (

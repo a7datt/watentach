@@ -557,9 +557,20 @@ export default function PosTab({ setCartCount }: PosTabProps) {
     if (!hiddenReceiptRef.current) return;
     try {
       showToast('جاري تحضير الفاتورة...', 'info');
-      const canvas = await html2canvas(hiddenReceiptRef.current, {
-        scale: 2, useCORS: true, backgroundColor: '#ffffff',
-        foreignObjectRendering: false, logging: false, allowTaint: true,
+      // انتظر قليلاً لضمان الرسم الكامل
+      await new Promise(r => setTimeout(r, 300));
+      const el = hiddenReceiptRef.current;
+      const canvas = await html2canvas(el, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: '#ffffff',
+        foreignObjectRendering: false,
+        logging: false,
+        allowTaint: true,
+        width: el.scrollWidth,
+        height: el.scrollHeight,
+        windowWidth: el.scrollWidth,
+        windowHeight: el.scrollHeight,
       });
       canvas.toBlob(async (blob) => {
         if (!blob) { showToast('حدث خطأ', 'error'); return; }
@@ -570,7 +581,7 @@ export default function PosTab({ setCartCount }: PosTabProps) {
           catch { downloadBlob(blob, filename); }
         } else { downloadBlob(blob, filename); }
       }, 'image/png', 0.95);
-    } catch { showToast('حدث خطأ أثناء المشاركة', 'error'); }
+    } catch (e) { console.error(e); showToast('حدث خطأ أثناء المشاركة', 'error'); }
   };
 
   const downloadBlob = (blob: Blob, filename: string) => {
@@ -595,22 +606,28 @@ export default function PosTab({ setCartCount }: PosTabProps) {
         <thead>
           <tr className="border-b border-gray-200 text-gray-500">
             <th className="py-1.5 font-semibold">المنتج</th>
-            <th className="py-1.5 font-semibold text-center w-10">الكمية</th>
-            <th className="py-1.5 font-semibold">المجموع</th>
+            <th className="py-1.5 font-semibold text-center w-8">الكمية</th>
+            <th className="py-1.5 font-semibold text-center">سعر الواحدة</th>
+            <th className="py-1.5 font-semibold text-left">المجموع</th>
           </tr>
         </thead>
         <tbody>
-          {txn.items.map((item, idx) => (
-            <tr key={idx} className="border-b border-gray-100 last:border-0">
-              <td className="py-2 text-gray-800 font-semibold">{item.name}</td>
-              <td className="py-2 text-center font-bold text-gray-600">{item.qty}</td>
-              <td className="py-2 font-bold text-primary">
-                {item.currency === 'USD'
-                  ? formatCurrencyUSD(item.subtotal_usd)
-                  : item.subtotal_syp.toLocaleString('en-US') + ' ل.س'}
-              </td>
-            </tr>
-          ))}
+          {txn.items.map((item, idx) => {
+            const unitPrice = item.currency === 'USD'
+              ? `$${item.price_usd.toFixed(2)}`
+              : `${item.price_syp.toLocaleString('en-US')} ل.س`;
+            const subtotal = item.currency === 'USD'
+              ? formatCurrencyUSD(item.subtotal_usd)
+              : item.subtotal_syp.toLocaleString('en-US') + ' ل.س';
+            return (
+              <tr key={idx} className="border-b border-gray-100 last:border-0">
+                <td className="py-2 text-gray-800 font-semibold">{item.name}</td>
+                <td className="py-2 text-center font-bold text-gray-600">{item.qty}</td>
+                <td className="py-2 text-center font-bold text-gray-500 text-[10px]">{unitPrice}</td>
+                <td className="py-2 font-bold text-primary text-left">{subtotal}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
       <div className="border-t border-gray-300 pt-3">
@@ -907,7 +924,7 @@ export default function PosTab({ setCartCount }: PosTabProps) {
 
       {/* Hidden receipt for sharing */}
       {lastTransaction && (
-        <div ref={hiddenReceiptRef} style={{ position: 'absolute', left: '-9999px', top: 0, width: '340px', zIndex: -1 }} dir="rtl">
+        <div ref={hiddenReceiptRef} style={{ position: 'fixed', left: '-9999px', top: '0px', width: '340px', opacity: 0, pointerEvents: 'none', zIndex: -1 }} dir="rtl">
           <ReceiptContent txn={lastTransaction} />
         </div>
       )}
