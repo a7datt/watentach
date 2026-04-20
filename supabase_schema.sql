@@ -91,3 +91,45 @@ ALTER TABLE products ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transactions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE transaction_items ENABLE ROW LEVEL SECURITY;
 ALTER TABLE settings ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- التحديثات الجديدة - نظام الصندوقين + دفتر الدين
+-- ============================================================
+
+-- أضف عمودَي الصندوق لجدول transactions
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS cash_syp NUMERIC DEFAULT 0;
+ALTER TABLE transactions ADD COLUMN IF NOT EXISTS cash_usd NUMERIC DEFAULT 0;
+
+-- أضف عمود العملة لجدول transaction_items
+ALTER TABLE transaction_items ADD COLUMN IF NOT EXISTS currency TEXT DEFAULT 'SYP' CHECK (currency IN ('SYP', 'USD'));
+
+-- جدول سحوبات الصندوق
+CREATE TABLE IF NOT EXISTS cash_box_withdrawals (
+  id TEXT PRIMARY KEY,
+  currency TEXT NOT NULL CHECK (currency IN ('SYP', 'USD')),
+  amount NUMERIC NOT NULL,
+  note TEXT,
+  timestamp TIMESTAMPTZ DEFAULT NOW()
+);
+
+-- جدول سجلات الديون
+CREATE TABLE IF NOT EXISTS debt_records (
+  id TEXT PRIMARY KEY,
+  invoice_number TEXT NOT NULL,
+  customer_name TEXT NOT NULL,
+  note TEXT,
+  timestamp TIMESTAMPTZ DEFAULT NOW(),
+  items JSONB NOT NULL DEFAULT '[]',
+  total_syp NUMERIC DEFAULT 0,
+  total_usd NUMERIC DEFAULT 0,
+  paid_syp NUMERIC DEFAULT 0,
+  paid_usd NUMERIC DEFAULT 0,
+  status TEXT DEFAULT 'unpaid' CHECK (status IN ('unpaid', 'partial', 'paid'))
+);
+
+-- RLS policies للجداول الجديدة
+ALTER TABLE cash_box_withdrawals ENABLE ROW LEVEL SECURITY;
+ALTER TABLE debt_records ENABLE ROW LEVEL SECURITY;
+
+CREATE POLICY IF NOT EXISTS "allow_all_withdrawals" ON cash_box_withdrawals FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY IF NOT EXISTS "allow_all_debts" ON debt_records FOR ALL USING (true) WITH CHECK (true);
