@@ -43,7 +43,7 @@ export interface Settings {
 // نوع عمليات الصندوق
 export interface CashBoxOperation {
   id: string;
-  type: 'sale' | 'withdrawal' | 'profit_withdrawal';
+  type: 'sale' | 'withdrawal' | 'profit_withdrawal' | 'deposit' | 'profit_deposit';
   currency: 'SYP' | 'USD';
   amount: number;
   note?: string;

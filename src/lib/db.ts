@@ -246,7 +246,7 @@ export const DB = {
   },
 
   // سجل سحب من الصندوق
-  withdrawFromCashBox: async (currency: 'SYP' | 'USD', amount: number, note: string): Promise<boolean> => {
+  withdrawFromCashBox: async (currency: 'SYP' | 'USD', amount: number, note: string, type?: string): Promise<boolean> => {
     const { error } = await supabase
       .from('cash_box_withdrawals')
       .insert([{
@@ -254,6 +254,7 @@ export const DB = {
         currency,
         amount,
         note,
+        type: type ?? (amount < 0 ? 'deposit' : 'withdrawal'),
         timestamp: new Date().toISOString(),
       }]);
 
@@ -262,6 +263,46 @@ export const DB = {
       return false;
     }
     return true;
+  },
+
+  // إيداع أرباح في الصندوق (يُضاف للصندوق فقط، ويُؤخذ من صافي الربح في التقارير)
+  depositProfitToCashBox: async (currency: 'SYP' | 'USD', amount: number, note: string): Promise<boolean> => {
+    const { error } = await supabase
+      .from('cash_box_withdrawals')
+      .insert([{
+        id: 'wdw_' + Date.now(),
+        currency,
+        amount: -amount,  // سالب = إضافة للصندوق
+        note: note || 'إيداع أرباح',
+        type: 'profit_deposit',
+        timestamp: new Date().toISOString(),
+      }]);
+
+    if (error) {
+      console.error('depositProfitToCashBox error:', error);
+      return false;
+    }
+    return true;
+  },
+
+  // جلب إجمالي إيداعات الأرباح (لخصمها من صافي الربح في الداشبورد)
+  getProfitDeposits: async (): Promise<{ syp: number; usd: number }> => {
+    const { data, error } = await supabase
+      .from('cash_box_withdrawals')
+      .select('currency, amount')
+      .eq('type', 'profit_deposit');
+
+    if (error || !data) return { syp: 0, usd: 0 };
+
+    let syp = 0;
+    let usd = 0;
+    data.forEach((row: any) => {
+      // amount مخزون كـ -X لذا نأخذ القيمة المطلقة
+      const abs = Math.abs(Number(row.amount ?? 0));
+      if (row.currency === 'SYP') syp += abs;
+      else if (row.currency === 'USD') usd += abs;
+    });
+    return { syp, usd };
   },
 
   // جلب سجل عمليات الصندوق
