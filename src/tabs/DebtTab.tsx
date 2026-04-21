@@ -74,10 +74,8 @@ export default function DebtTab({ onUnpaidCountChange }: DebtTabProps) {
     const ok = await DB.updateDebtPayment(payModal.id, newPaidSYP, newPaidUSD, status);
     if (ok) {
       // إضافة للصندوق
-      if (syp > 0) await DB.withdrawFromCashBox('SYP', -syp, `استلام دين - ${payModal.customer_name}`).catch(() => {
-        // إذا فشل السحب السلبي، نحاول عبر دالة مخصصة - للتبسيط نستخدم نفس الدالة
-      });
-      if (usd > 0) await DB.withdrawFromCashBox('USD', -usd, `استلام دين - ${payModal.customer_name}`).catch(() => {});
+      if (syp > 0) await DB.withdrawFromCashBox('SYP', -syp, `استلام دين - ${payModal.customer_name}`, 'deposit').catch(() => {});
+      if (usd > 0) await DB.withdrawFromCashBox('USD', -usd, `استلام دين - ${payModal.customer_name}`, 'deposit').catch(() => {});
       showToast(`تم تسجيل الدفع بنجاح - ${status === 'paid' ? 'الدين مسدد بالكامل' : 'دفع جزئي'}`, 'success');
       setPayModal(null);
       setPayAmountSYP('');
@@ -93,8 +91,8 @@ export default function DebtTab({ onUnpaidCountChange }: DebtTabProps) {
     if (!revertModal) return;
     setReverting(true);
     // إعادة الكميات للصندوق (خصم ما تم تسجيله)
-    if (revertModal.paid_syp > 0) await DB.withdrawFromCashBox('SYP', revertModal.paid_syp, `إلغاء دفع - ${revertModal.customer_name}`).catch(() => {});
-    if (revertModal.paid_usd > 0) await DB.withdrawFromCashBox('USD', revertModal.paid_usd, `إلغاء دفع - ${revertModal.customer_name}`).catch(() => {});
+    if (revertModal.paid_syp > 0) await DB.withdrawFromCashBox('SYP', revertModal.paid_syp, `إلغاء دفع - ${revertModal.customer_name}`, 'withdrawal').catch(() => {});
+    if (revertModal.paid_usd > 0) await DB.withdrawFromCashBox('USD', revertModal.paid_usd, `إلغاء دفع - ${revertModal.customer_name}`, 'withdrawal').catch(() => {});
     const ok = await DB.updateDebtPayment(revertModal.id, 0, 0, 'unpaid');
     if (ok) {
       showToast('تم إعادة الدين لحالة "غير مدفوع"', 'success');

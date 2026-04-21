@@ -53,10 +53,19 @@ export default function SettingsTab() {
     setSettings(s);
     setRateInput(s.exchange_rate.toString());
     setCashBox(cb);
-    // جلب الأرباح الكلية
-    const txns = await DB.getTransactions();
-    setTotalProfitSYP(txns.reduce((a, t) => a + t.profit_syp, 0));
-    setTotalProfitUSD(txns.reduce((a, t) => a + t.profit_usd, 0));
+    // جلب صافي الأرباح (إجمالي الأرباح - ما سُحب كأرباح سابقاً)
+    const [txns, ops] = await Promise.all([DB.getTransactions(), DB.getCashBoxOperations()]);
+    const grossProfitSYP = txns.reduce((a, t) => a + t.profit_syp, 0);
+    const grossProfitUSD = txns.reduce((a, t) => a + t.profit_usd, 0);
+    // اطرح الأرباح المسحوبة مسبقاً
+    const withdrawnSYP = ops
+      .filter(op => op.type === 'profit_withdrawal' && op.currency === 'SYP')
+      .reduce((a, op) => a + Math.abs(op.amount), 0);
+    const withdrawnUSD = ops
+      .filter(op => op.type === 'profit_withdrawal' && op.currency === 'USD')
+      .reduce((a, op) => a + Math.abs(op.amount), 0);
+    setTotalProfitSYP(Math.max(0, grossProfitSYP - withdrawnSYP));
+    setTotalProfitUSD(Math.max(0, grossProfitUSD - withdrawnUSD));
   };
 
   const openModal = (type: ModalType) => {
@@ -94,8 +103,8 @@ export default function SettingsTab() {
     const amount = parseFloat(wdAmount);
     if (!amount || amount <= 0) { showToast('أدخل مبلغاً صحيحاً', 'error'); return; }
     setWdLoading(true);
-    // الإيداع = سحب بمبلغ سالب
-    const ok = await DB.withdrawFromCashBox(currency, -amount, wdNote || `إيداع في الصندوق ${currency === 'SYP' ? 'السوري' : 'الدولاري'}`);
+    // الإيداع = سحب بمبلغ سالب، نمرر type بشكل صريح
+    const ok = await DB.withdrawFromCashBox(currency, -amount, wdNote || `إيداع في الصندوق ${currency === 'SYP' ? 'السوري' : 'الدولاري'}`, 'deposit');
     if (ok) {
       showToast('تم الإيداع بنجاح ✓', 'success');
       closeModal();
@@ -129,7 +138,7 @@ export default function SettingsTab() {
     const balance = profitCurrency === 'SYP' ? cashBox.balance_syp : cashBox.balance_usd;
     if (amount > balance) { showToast('الأرباح أكبر من رصيد الصندوق الحالي', 'warning'); return; }
     setProfitLoading(true);
-    const ok = await DB.withdrawFromCashBox(profitCurrency, amount, 'سحب أرباح');
+    const ok = await DB.withdrawFromCashBox(profitCurrency, amount, 'سحب أرباح', 'profit_withdrawal');
     if (ok) {
       showToast('تم سحب الأرباح بنجاح ✓', 'success');
       closeModal();
