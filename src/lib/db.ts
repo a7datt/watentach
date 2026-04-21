@@ -247,14 +247,16 @@ export const DB = {
 
   // سجل سحب من الصندوق
   withdrawFromCashBox: async (currency: 'SYP' | 'USD', amount: number, note: string, type?: string): Promise<boolean> => {
+    // amount موجب = سحب، amount سالب = إيداع
+    const resolvedType = type ?? (amount < 0 ? 'deposit' : 'withdrawal');
     const { error } = await supabase
       .from('cash_box_withdrawals')
       .insert([{
-        id: 'wdw_' + Date.now(),
+        id: 'wdw_' + Date.now() + '_' + Math.floor(Math.random() * 10000),
         currency,
         amount,
         note,
-        type: type ?? (amount < 0 ? 'deposit' : 'withdrawal'),
+        type: resolvedType,
         timestamp: new Date().toISOString(),
       }]);
 
@@ -270,9 +272,9 @@ export const DB = {
     const { error } = await supabase
       .from('cash_box_withdrawals')
       .insert([{
-        id: 'wdw_' + Date.now(),
+        id: 'dep_' + Date.now() + '_' + Math.floor(Math.random() * 10000),
         currency,
-        amount: -amount,  // سالب = إضافة للصندوق
+        amount: -Math.abs(amount),  // سالب دائماً = إضافة للصندوق
         note: note || 'إيداع أرباح',
         type: 'profit_deposit',
         timestamp: new Date().toISOString(),
